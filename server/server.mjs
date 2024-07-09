@@ -1,34 +1,42 @@
-import weaveDrive from "./weavedrive.js";
-import { readFileSync } from "fs"
+// Import the express module
+import express from "express"
+import bodyParser from "body-parser";
+import { readFileSync } from 'fs';
 import Module from "./AOS.js";
-import { createInterface } from 'readline/promises';
-import { stdin as input, stdout as output } from 'process';
-
-const rl = createInterface({ input, output });
+import weaveDrive from "./weavedrive.js";
 
 const wasm = readFileSync('./AOS.wasm')
+
+// Create an instance of an Express application
+const app = express();
+
+const port = 3000;
+
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+
 const AdmissableList =
-  [
-    "dx3GrOQPV5Mwc1c-4HTsyq0s1TNugMf7XfIKJkyVQt8", // Random NFT metadata (1.7kb of JSON)
-    "XOJ8FBxa6sGLwChnxhF2L71WkKLSKq1aU5Yn5WnFLrY", // GPT-2 117M model.
-    "M-OzkyjxWhSvWYF87p0kvmkuAEEkvOzIj4nMNoSIydc", // GPT-2-XL 4-bit quantized model.
-    "kd34P4974oqZf2Db-hFTUiCipsU6CzbR6t-iJoQhKIo", // Phi-2 
-    "ISrbGzQot05rs_HKC08O_SmkipYQnqgB1yC3mjZZeEo", // Phi-3 Mini 4k Instruct
-    "sKqjvBbhqKvgzZT4ojP1FNvt4r_30cqjuIIQIr-3088", // CodeQwen 1.5 7B Chat q3
-    "Pr2YVrxd7VwNdg6ekC0NXWNKXxJbfTlHhhlrKbAd1dA", // Llama3 8B Instruct q4
-    "jbx-H6aq7b3BbNCHlK50Jz9L-6pz9qmldrYXMwjqQVI"  // Llama3 8B Instruct q8
-  ]
+{
+  "gpt2": "XOJ8FBxa6sGLwChnxhF2L71WkKLSKq1aU5Yn5WnFLrY", // GPT-2 117M model.
+  "gpt2-xl": "M-OzkyjxWhSvWYF87p0kvmkuAEEkvOzIj4nMNoSIydc", // GPT-2-XL 4-bit quantized model.
+  "phi2": "kd34P4974oqZf2Db-hFTUiCipsU6CzbR6t-iJoQhKIo", // Phi-2 
+  "phi3-mini": "ISrbGzQot05rs_HKC08O_SmkipYQnqgB1yC3mjZZeEo", // Phi-3 Mini 4k Instruct
+  "Code-Qwen": "sKqjvBbhqKvgzZT4ojP1FNvt4r_30cqjuIIQIr-3088", // CodeQwen 1.5 7B Chat q3
+  "Llama3-q4": "Pr2YVrxd7VwNdg6ekC0NXWNKXxJbfTlHhhlrKbAd1dA", // Llama3 8B Instruct q4
+  "Llama3-q8": "jbx-H6aq7b3BbNCHlK50Jz9L-6pz9qmldrYXMwjqQVI"  // Llama3 8B Instruct q8
+}
 
 
 var instantiateWasm = function (imports, cb) {
-  console.log(imports)
+
   // merge imports argument
   // const customImports = {
   //   env: {
   //     memory: new WebAssembly.Memory({ initial: 8589934592 / 65536, maximum: 17179869184 / 65536, index: 'i64' })
   //   }
   // }
-  //imports.env = Object.assign({}, imports.env, customImports.env)
+  // imports.env = Object.assign({}, imports.env, customImports.env)
 
   WebAssembly.instantiate(wasm, imports).then(result =>
 
@@ -36,6 +44,8 @@ var instantiateWasm = function (imports, cb) {
   )
   return {}
 }
+
+
 
 const instance = await Module({
   admissableList: AdmissableList,
@@ -60,74 +70,76 @@ await instance['FS_createPath']('/', 'data')
 await instance['FS_createDataFile']('/', 'data/1', Buffer.from('HELLO WORLD'), true, false, false)
 
 
-
 const handle = async function (msg, env) {
   const res = await instance.cwrap('handle', 'string', ['string', 'string'], { async: true })(JSON.stringify(msg), JSON.stringify(env))
   console.log('Memory used:', instance.HEAP8.length)
   return JSON.parse(res)
 }
 
+app.get('/', (req, res) => {
+  res.send('Hello, world!');
+});
 
 
+app.get('/api/get-models', (req, res) => {
+  res.json(AdmissableList);
+});
 
-async function run2() {
-  let result = await handle(getEval(`
+app.post('/api/load-model', async (req, res) => {
+
+  const model = req.body.model
+  // initialize gpt
+  await handle(getEval(`
     local Llama = require("llama")
     io.stderr:write([[Loading model...\n]])
-    local result = Llama.load("/data/Pr2YVrxd7VwNdg6ekC0NXWNKXxJbfTlHhhlrKbAd1dA")
+    local result = Llama.load("/data/${AdmissableList[model]}")
   `), getEnv())
+  res.json("Model Loaded");
   
-  while (true) {
+});
 
-    const prompt = await rl.question('Prompt: ');
-
-    console.log(prompt)
-
-    const result = await handle(getEval(`
-      Llama.setPrompt("${prompt}")
-      io.stderr:write([[Prompt set! Running...\n]])
-
-      local result = ""
-      for i = 0, 100, 1 do
-        local token = Llama.next()
-        result = result .. token
-        io.stderr:write([[Got token: ]] .. token .. [[\n\n]])
-      end
-
-      return result
-    `), getEnv())
-    console.log("START SECOND MESSAGE")
-    console.log(result.response.Output.data.output)
-  }
-
-}
-async function run() {
+app.post('/api/generate-prompt', async (req, res) => {
+  const prompt = req.body.prompt;
+  const tokens = req.body.tokens
+  console.log('Received new data:', prompt);
 
 
-  await handle(
-    getLua('M-OzkyjxWhSvWYF87p0kvmkuAEEkvOzIj4nMNoSIydc',
-      90,
-      "Hello how are you"),
-    getEnv()
-  )
+  const result = await handle(getEval(`
+    Llama.setPrompt("${prompt}")
+    io.stderr:write([[Prompt set! Running...\n]])
 
-  await handle(
-    getLua('M-OzkyjxWhSvWYF87p0kvmkuAEEkvOzIj4nMNoSIydc',
-      90,
-      "I am chill"),
-    getEnv()
-  )
-}
+    local result = ""
+    for i = 0, ${tokens}, 1 do
+      local token = Llama.next()
+      result = result .. token
+      io.stderr:write([[Got token: ]] .. token .. [[\n\n]])
+    end
+
+    return result
+  `), getEnv())
+
+  let llm_res = result.response.Output.data.output
+  res.status(201).json({
+    message: 'Result',
+    data: llm_res
+  });
+});
+
+app.listen(port, () => {
+  console.log(`Server is running on http://localhost:${port}`);
+});
 
 
-run2()
 
 function getLua(model, len, prompt) {
   if (!prompt) {
     prompt = "Tell me a story."
   }
   return getEval(`
+  local Llama = require("llama")
   io.stderr:write([[Loaded! Setting prompt...\n]])
+  io.stderr:write([[Loading model...\n]])
+  Llama.load('/data/${model}')
   Llama.setPrompt([[${prompt}]])
   local result = ""
   io.stderr:write([[Running...\n]])
