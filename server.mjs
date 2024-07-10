@@ -4,27 +4,29 @@ import bodyParser from "body-parser";
 import { readFileSync } from 'fs';
 import Module from "./AOS.js";
 import weaveDrive from "./weavedrive.js";
+import cors from "cors";
 
 const wasm = readFileSync('./AOS.wasm')
 
 // Create an instance of an Express application
 const app = express();
 
-const port = 3001;
+const port = 3000;
 
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+app.use(cors());
 
 
 const AdmissableList =
 {
-  "gpt2": "XOJ8FBxa6sGLwChnxhF2L71WkKLSKq1aU5Yn5WnFLrY", // GPT-2 117M model.
-  "gpt2-xl": "M-OzkyjxWhSvWYF87p0kvmkuAEEkvOzIj4nMNoSIydc", // GPT-2-XL 4-bit quantized model.
-  "phi2": "kd34P4974oqZf2Db-hFTUiCipsU6CzbR6t-iJoQhKIo", // Phi-2 
-  "phi3-mini": "ISrbGzQot05rs_HKC08O_SmkipYQnqgB1yC3mjZZeEo", // Phi-3 Mini 4k Instruct
-  "Code-Qwen": "sKqjvBbhqKvgzZT4ojP1FNvt4r_30cqjuIIQIr-3088", // CodeQwen 1.5 7B Chat q3
-  "Llama3-q4": "Pr2YVrxd7VwNdg6ekC0NXWNKXxJbfTlHhhlrKbAd1dA", // Llama3 8B Instruct q4
-  "Llama3-q8": "jbx-H6aq7b3BbNCHlK50Jz9L-6pz9qmldrYXMwjqQVI"  // Llama3 8B Instruct q8
+  "GPT-2 117M model": "XOJ8FBxa6sGLwChnxhF2L71WkKLSKq1aU5Yn5WnFLrY", // GPT-2 117M model.
+  "GPT-2-XL 4-bit quantized model": "M-OzkyjxWhSvWYF87p0kvmkuAEEkvOzIj4nMNoSIydc", // GPT-2-XL 4-bit quantized model.
+  "Phi-2": "kd34P4974oqZf2Db-hFTUiCipsU6CzbR6t-iJoQhKIo", // Phi-2 
+  "Phi-3 Mini 4k Instruct": "ISrbGzQot05rs_HKC08O_SmkipYQnqgB1yC3mjZZeEo", // Phi-3 Mini 4k Instruct
+  "CodeQwen 1.5 7B Chat q3": "sKqjvBbhqKvgzZT4ojP1FNvt4r_30cqjuIIQIr-3088", // CodeQwen 1.5 7B Chat q3
+  "Llama3 8B Instruct q4": "Pr2YVrxd7VwNdg6ekC0NXWNKXxJbfTlHhhlrKbAd1dA", // Llama3 8B Instruct q4
+  "Llama3 8B Instruct q8": "jbx-H6aq7b3BbNCHlK50Jz9L-6pz9qmldrYXMwjqQVI"  // Llama3 8B Instruct q8
 }
 
 
@@ -86,43 +88,72 @@ app.get('/api/get-models', (req, res) => {
 });
 
 app.post('/api/load-model', async (req, res) => {
+  try {
+    const model = req.body.model
+    // initialize gpt
+    await handle(getEval(`
+      local Llama = require("llama")
+      io.stderr:write([[Loading model...\n]])
+      local result = Llama.load("/data/${AdmissableList[model]}")
+    `), getEnv())
+    res.json("Model Loaded");
+  } catch {
+    res.json("Error occured").status(500);
+  }
+  
+});
 
-  const model = req.body.model
-  // initialize gpt
-  await handle(getEval(`
-    local Llama = require("llama")
-    io.stderr:write([[Loading model...\n]])
-    local result = Llama.load("/data/${AdmissableList[model]}")
-  `), getEnv())
-  res.json("Model Loaded");
+app.post('/api/set-context', async (req, res) => {
+  try {
+    const tune_prompt = req.body.tune_prompt
+    // initialize gpt
+    await handle(getEval(`
+      Llama.setPrompt("${tune_prompt}")
+      Llama.add("${tune_prompt}")
+      local str = Llama.run(20)
+      return str
+    `), getEnv())
+    res.json("Context set");
+  } catch (err) {
+    console.log(err)
+    res.json("Error occured").status(500);
+  }
   
 });
 
 app.post('/api/generate-prompt', async (req, res) => {
-  const prompt = req.body.prompt;
-  const tokens = req.body.tokens
-  console.log('Received new data:', prompt);
 
+  try {
+    const prompt = req.body.prompt;
+    const tokens = req.body.tokens
+    console.log('Received new data:',prompt, tokens);
+    
+  
+    const result = await handle(getEval(`
+      Llama.setPrompt("${prompt}")
+      io.stderr:write([[Prompt set! Running...\n]])
+  
+      local result = ""
+      for i = 0, ${tokens}, 1 do
+        local token = Llama.next()
+        result = result .. token
+        io.stderr:write([[Got token: ]] .. token .. [[\n\n]])
+      end
+  
+      return result
+    `), getEnv())
+      
+    let llm_res = result.response.Output.data.output
+    console.log(llm_res)
+    res.status(201).json({
+      message: 'Result',
+      data: llm_res
+    });
+  }
 
-  const result = await handle(getEval(`
-    Llama.setPrompt("${prompt}")
-    io.stderr:write([[Prompt set! Running...\n]])
-
-    local result = ""
-    for i = 0, ${tokens}, 1 do
-      local token = Llama.next()
-      result = result .. token
-      io.stderr:write([[Got token: ]] .. token .. [[\n\n]])
-    end
-
-    return result
-  `), getEnv())
-
-  let llm_res = result.response.Output.data.output
-  res.status(201).json({
-    message: 'Result',
-    data: llm_res
-  });
+  catch (err) {
+    res.status(500);
+  }
 });
 
 app.listen(port, () => {

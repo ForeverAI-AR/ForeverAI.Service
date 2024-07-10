@@ -168,13 +168,13 @@ return Llama.info()
   local Llama = require("llama")
   Llama.load('/data/ISrbGzQot05rs_HKC08O_SmkipYQnqgB1yC3mjZZeEo')
   Llama.setPrompt([[<|user|>Tell me a great story<|assistant|>]])
+  Llama.add("dog")
   local str = ""
   for i = 0, 100, 1 do
     str = str .. Llama.next()
     io.stderr:write([[Str: ]] .. str .. [[\n]])
     io.stderr:flush()
     if i % 30 == 0 then
-      Llama.add("dog")
       str = str .. "dog"
     end
   end
